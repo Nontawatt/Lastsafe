@@ -1,0 +1,74 @@
+# Lastsafe Client Configuration Example
+# ======================================
+# Copy this file to ~/.lastsafe/config.yaml and customize as needed.
+
+# Encryption settings
+encryption:
+  # Post-quantum KEM algorithm (ML-KEM-512, ML-KEM-768, ML-KEM-1024)
+  kem_algorithm: "ML-KEM-512"
+
+  # Chunk size for streaming encryption (bytes)
+  chunk_size: 67108864  # 64MB
+
+  # Enable streaming encryption for large files
+  use_streaming: true
+
+  # File size threshold for streaming (bytes)
+  streaming_threshold: 104857600  # 100MB
+
+# Key management settings
+keys:
+  # Directory for storing keys
+  key_dir: "~/.lastsafe/keys"
+
+  # Recommended key rotation period (days)
+  key_rotation_days: 365
+
+# Cloud provider settings
+cloud:
+  # Default provider: s3, gcs, azure, rclone
+  default_provider: "rclone"
+
+  # AWS S3 settings (optional)
+  # s3:
+  #   bucket: "my-backup-bucket"
+  #   region: "us-east-1"
+
+  # Google Cloud Storage settings (optional)
+  # gcs:
+  #   bucket: "my-backup-bucket"
+  #   project: "my-project-id"
+  #   credentials_file: "~/.config/gcloud/credentials.json"
+
+  # Azure Blob Storage settings (optional)
+  # azure:
+  #   container: "my-backup-container"
+  #   account_name: "mystorageaccount"
+
+  # Rclone remote settings (optional)
+  rclone:
+    remote: "gdrive"  # Name of configured rclone remote
+
+# Logging settings
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+
+  # Show progress bars
+  show_progress: true
+
+  # Verbose mode
+  verbose: false
+
+  # Optional log file
+  # log_file: "~/.lastsafe/lastsafe.log"
+
+# General settings
+# Preserve file metadata during encryption
+preserve_metadata: true
+
+# Include hidden files (starting with .)
+include_hidden_files: false
+
+# Custom temporary directory (optional)
+# temp_dir: "/tmp/lastsafe"

@@ -1,2 +1,10 @@
+# Core dependencies
 liboqs-python>=0.12.0
 cryptography>=41.0.0
+PyYAML>=6.0
+
+# Optional: Cloud provider SDKs (install as needed)
+# pip install boto3                    # For AWS S3
+# pip install google-cloud-storage     # For Google Cloud Storage
+# pip install azure-storage-blob       # For Azure Blob Storage
+# pip install azure-identity           # For Azure authentication
