@@ -28,10 +28,12 @@ security implications and keep your private keys safe.
 """
 
 import argparse
+import json
 import os
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Tuple
 
@@ -331,6 +333,131 @@ def main() -> None:
         "--alg", type=str, default=DEFAULT_KEM_ALG, help=f"KEM algorithm (default: {DEFAULT_KEM_ALG})"
     )
 
+    # -----------------------------------------------------------------------
+    # Log Management commands (inspired by SRAN METALog)
+    # -----------------------------------------------------------------------
+
+    # log-collect: start syslog collector
+    parser_logcol = subparsers.add_parser(
+        "log-collect",
+        help="Start syslog collector (UDP/TCP, RFC 5424 & RFC 3164)",
+    )
+    parser_logcol.add_argument(
+        "--bind", type=str, default="0.0.0.0", help="Bind address (default: 0.0.0.0)"
+    )
+    parser_logcol.add_argument(
+        "--udp-port", type=int, default=1514, help="UDP port (default: 1514)"
+    )
+    parser_logcol.add_argument(
+        "--tcp-port", type=int, default=1514, help="TCP port (default: 1514)"
+    )
+    parser_logcol.add_argument(
+        "--no-udp", action="store_true", help="Disable UDP listener"
+    )
+    parser_logcol.add_argument(
+        "--no-tcp", action="store_true", help="Disable TCP listener"
+    )
+    parser_logcol.add_argument(
+        "--log-dir", type=Path, default=Path("logs"), help="Log storage directory (default: ./logs)"
+    )
+    parser_logcol.add_argument(
+        "--max-file-size", type=int, default=50, help="Max log file size in MB before rotation (default: 50)"
+    )
+    parser_logcol.add_argument(
+        "--max-archives", type=int, default=100, help="Max number of archived log files (default: 100)"
+    )
+    parser_logcol.add_argument(
+        "--key-dir", type=Path, default=None,
+        help="Key directory for PQC encryption of archived logs (optional)"
+    )
+    parser_logcol.add_argument(
+        "--alg", type=str, default=DEFAULT_KEM_ALG, help=f"KEM algorithm (default: {DEFAULT_KEM_ALG})"
+    )
+    parser_logcol.add_argument(
+        "--forward-udp", type=str, default=None,
+        help="Forward events via UDP to host:port (e.g. siem.example.com:514)"
+    )
+    parser_logcol.add_argument(
+        "--forward-tcp", type=str, default=None,
+        help="Forward events via TCP to host:port (e.g. siem.example.com:514)"
+    )
+    parser_logcol.add_argument(
+        "--forward-file", type=Path, default=None,
+        help="Forward events to a file"
+    )
+
+    # log-ingest: import logs from a file
+    parser_logingest = subparsers.add_parser(
+        "log-ingest",
+        help="Import log events from a text file into storage",
+    )
+    parser_logingest.add_argument(
+        "file", type=Path, help="Log file to import (one syslog line per line)"
+    )
+    parser_logingest.add_argument(
+        "--log-dir", type=Path, default=Path("logs"), help="Log storage directory (default: ./logs)"
+    )
+    parser_logingest.add_argument(
+        "--key-dir", type=Path, default=None,
+        help="Key directory for PQC encryption of archived logs (optional)"
+    )
+    parser_logingest.add_argument(
+        "--alg", type=str, default=DEFAULT_KEM_ALG, help=f"KEM algorithm (default: {DEFAULT_KEM_ALG})"
+    )
+
+    # log-search: search stored logs
+    parser_logsearch = subparsers.add_parser(
+        "log-search",
+        help="Search log events with filters (pattern, severity, time range)",
+    )
+    parser_logsearch.add_argument(
+        "--pattern", "-p", type=str, default=None, help="Regex pattern to search in messages"
+    )
+    parser_logsearch.add_argument(
+        "--severity", "-s", type=str, default=None,
+        help="Severity filter: name (e.g. ERROR) or range (e.g. 0-3)"
+    )
+    parser_logsearch.add_argument(
+        "--hostname", type=str, default=None, help="Filter by hostname (regex)"
+    )
+    parser_logsearch.add_argument(
+        "--app", type=str, default=None, help="Filter by app name (regex)"
+    )
+    parser_logsearch.add_argument(
+        "--from", dest="time_from", type=str, default=None, help="Time range start (ISO format)"
+    )
+    parser_logsearch.add_argument(
+        "--to", dest="time_to", type=str, default=None, help="Time range end (ISO format)"
+    )
+    parser_logsearch.add_argument(
+        "--source-ip", type=str, default=None, help="Filter by source IP"
+    )
+    parser_logsearch.add_argument(
+        "--limit", "-n", type=int, default=50, help="Max results (default: 50)"
+    )
+    parser_logsearch.add_argument(
+        "--log-dir", type=Path, default=Path("logs"), help="Log storage directory (default: ./logs)"
+    )
+    parser_logsearch.add_argument(
+        "--key-dir", type=Path, default=None,
+        help="Key directory for decrypting PQC-encrypted archives (optional)"
+    )
+    parser_logsearch.add_argument(
+        "--alg", type=str, default=DEFAULT_KEM_ALG, help=f"KEM algorithm (default: {DEFAULT_KEM_ALG})"
+    )
+    parser_logsearch.add_argument(
+        "--json", dest="output_json", action="store_true", help="Output results as JSON"
+    )
+
+    # log-stats: show storage and collector stats
+    parser_logstats = subparsers.add_parser(
+        "log-stats",
+        help="Show log storage statistics",
+    )
+    parser_logstats.add_argument(
+        "--log-dir", type=Path, default=Path("logs"), help="Log storage directory (default: ./logs)"
+    )
+
     args = parser.parse_args()
 
     if args.command == "generate-keys":
@@ -358,6 +485,136 @@ def main() -> None:
         encrypt_and_upload(args.src, args.remote, args.key_dir, args.alg)
     elif args.command == "download-decrypt":
         download_and_decrypt(args.remote, args.dst, args.key_dir, args.alg)
+
+    # ------------------------------------------------------------------
+    # Log Management command handlers
+    # ------------------------------------------------------------------
+    elif args.command == "log-collect":
+        from log_manager import LogForwarder, LogManager
+
+        pub_key_path = (args.key_dir / "public.key") if args.key_dir else None
+        manager = LogManager(
+            storage_dir=args.log_dir,
+            max_file_size=args.max_file_size * 1024 * 1024,
+            max_archives=args.max_archives,
+            public_key_path=pub_key_path,
+            kem_alg=args.alg,
+        )
+
+        # Set up forwarders if requested
+        if args.forward_udp:
+            host, port = args.forward_udp.rsplit(":", 1)
+            manager.add_forwarder(LogForwarder(
+                dest_type="udp", dest_host=host, dest_port=int(port)
+            ))
+        if args.forward_tcp:
+            host, port = args.forward_tcp.rsplit(":", 1)
+            manager.add_forwarder(LogForwarder(
+                dest_type="tcp", dest_host=host, dest_port=int(port)
+            ))
+        if args.forward_file:
+            manager.add_forwarder(LogForwarder(
+                dest_type="file", dest_file=args.forward_file
+            ))
+
+        manager.start_collector(
+            bind_address=args.bind,
+            udp_port=args.udp_port,
+            tcp_port=args.tcp_port,
+            enable_udp=not args.no_udp,
+            enable_tcp=not args.no_tcp,
+        )
+        pqc_status = "enabled" if pub_key_path else "disabled"
+        print(f"Log collector running (PQC encryption: {pqc_status})")
+        print("Press Ctrl+C to stop.")
+        try:
+            while True:
+                time.sleep(10)
+                stats = manager.get_stats()
+                collector_stats = stats.get("collector", {})
+                total = collector_stats.get("udp_received", 0) + collector_stats.get("tcp_received", 0)
+                print(f"  Events received: {total} | Storage: {stats['storage']['active_log_events']} active events, "
+                      f"{stats['storage']['archive_count']} archives")
+        except KeyboardInterrupt:
+            print("\nShutting down collector...")
+            manager.stop()
+
+    elif args.command == "log-ingest":
+        from log_manager import LogManager
+
+        pub_key_path = (args.key_dir / "public.key") if args.key_dir else None
+        manager = LogManager(
+            storage_dir=args.log_dir,
+            public_key_path=pub_key_path,
+            kem_alg=args.alg,
+        )
+        count = manager.ingest_file(args.file)
+        print(f"Ingested {count} log events from {args.file}")
+
+    elif args.command == "log-search":
+        from log_manager import LogSearch, SyslogSeverity
+
+        sec_key_path = (args.key_dir / "private.key") if args.key_dir else None
+        searcher = LogSearch(
+            storage_dir=args.log_dir,
+            secret_key_path=sec_key_path,
+            kem_alg=args.alg,
+        )
+
+        # Parse severity filter
+        severity_min = None
+        severity_max = None
+        if args.severity:
+            sev = args.severity.upper()
+            if "-" in sev:
+                parts = sev.split("-", 1)
+                severity_min = int(parts[0]) if parts[0].isdigit() else SyslogSeverity[parts[0]].value
+                severity_max = int(parts[1]) if parts[1].isdigit() else SyslogSeverity[parts[1]].value
+            elif sev.isdigit():
+                severity_max = int(sev)
+            else:
+                severity_max = SyslogSeverity[sev].value
+
+        results = searcher.search(
+            pattern=args.pattern,
+            severity_min=severity_min,
+            severity_max=severity_max,
+            hostname=args.hostname,
+            app_name=args.app,
+            time_from=args.time_from,
+            time_to=args.time_to,
+            source_ip=args.source_ip,
+            limit=args.limit,
+        )
+
+        if args.output_json:
+            for event in results:
+                print(event.to_json())
+        else:
+            for event in results:
+                sev = event.severity_name
+                print(f"[{event.timestamp}] [{sev:13s}] {event.hostname} {event.app_name}: {event.message}")
+
+        print(f"\n--- {len(results)} event(s) found ---")
+
+    elif args.command == "log-stats":
+        from log_manager import LogStorage
+
+        storage = LogStorage(storage_dir=args.log_dir)
+        stats = storage.get_stats()
+        print("Log Storage Statistics")
+        print("=" * 50)
+        for key, value in stats.items():
+            label = key.replace("_", " ").title()
+            if "bytes" in key.lower() and isinstance(value, (int, float)):
+                if value > 1024 * 1024:
+                    value = f"{value:,} ({value / 1024 / 1024:.1f} MB)"
+                elif value > 1024:
+                    value = f"{value:,} ({value / 1024:.1f} KB)"
+                else:
+                    value = f"{value:,} B"
+            print(f"  {label}: {value}")
+
     else:
         parser.error("Unknown command")
 
